@@ -3,12 +3,13 @@ from flask_restful import Api, Resource, reqparse, abort, fields, marshal_with
 from flask_sqlalchemy import SQLAlchemy  # Import necessary modules from Flask and Flask-RESTful to database
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 api = Api(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'  # Use SQLite for simplicity
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = 'super-secret-key'
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
@@ -29,7 +30,7 @@ note_put_args.add_argument("title", type=str, help="Title of the note is require
 note_put_args.add_argument("content", type=str, help="The content of the note is required", required=True)
 
 note_update_args = reqparse.RequestParser()
-note_update_args.add_argument("title", type=str help="Tile of note is required")
+note_update_args.add_argument("title", type=str, help="Tile of note is required")
 note_update_args.add_argument("content", type=str, help="Content of note is required")
 
 #Defines how the object should be cerialized when returned in a response.
@@ -37,8 +38,9 @@ resource_fields = {
     "id": fields.Integer,
     "title": fields.String,
     "content":fields.String,
-    "user": fields.String,
-    "login": fields.String
+    "user_id": fields.Integer,
+    "created_at": fields.DateTime,
+    "updated_at": fields.DateTime
 }
 
 class UserModel(db.Model):
@@ -84,16 +86,16 @@ def login():
     password = data.get("password")
 
     user = UserModel.query.filter_by(username=username).first()
-    if user and check_password_hash(user.password, password)
-        token = create_access_token(identity=user.id)
-        return {"token": token}, 200
+    if user and check_password_hash(user.password, password):
+        token = create_access_token(identity=str(user.id))
+        return {"access_token": token}, 200
 
 class Note(Resource):
     @jwt_required()  # Protect this resource with JWT authentication
     @marshal_with(resource_fields)
     #Get methood to get a note from user by ID
     def get(self, note_id):
-        user_id = get_jwt_identity()  # Get the user ID from the JWT token
+        user_id = int(get_jwt_identity())  # Get the user ID from the JWT token
         result = NoteModel.query.filter_by(id=note_id,user_id=user_id).first()
         if not result:
             abort(404,message="Note not found")
@@ -103,16 +105,16 @@ class Note(Resource):
     @marshal_with(resource_fields)
     #Post method to create a new note
     def post(self, note_id):
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         args = note_post_args.parse_args()
         result = NoteModel.query.filter_by(title=args['title']).first()
         
         if result:
             abort(409, message="Note title is taken")
-        if NoteModel.query.filter_by(id=note_id).first():
+        if NoteModel.query.filter_by(id=note_id,user_id=user_id).first():
             abort(409, message="Note ID already exists")
 
-        note = NoteModel(id=note_id, title=args['title'], content=args['content'], user="default_user", login="default_login")
+        note = NoteModel(id=note_id, title=args['title'], content=args['content'], user_id=user_id)
         db.session.add(note)
         db.session.commit()
         return note, 201
@@ -121,7 +123,7 @@ class Note(Resource):
     @marshal_with(resource_fields)
     def put(self,note_id):
         args = note_put_args.parse_args()
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         result = NoteModel.query.filter_by(id=note_id, user_id=user_id).first()
         if not result:
             abort(404, message="Note not found")
@@ -131,10 +133,12 @@ class Note(Resource):
         db.session.commit()
         return result, 200
     
+    @jwt_required()
     @marshal_with(resource_fields)
     def patch(self, note_id):
         args = note_update_args.parse_args()
-        result = NoteModel.query.filter_by(id=note_id).first()
+        user_id = int(get_jwt_identity())
+        result = NoteModel.query.filter_by(id=note_id,user_id=user_id).first()
         if not result:
             abort(404, message="Note not found")
         
@@ -147,7 +151,7 @@ class Note(Resource):
     
     @jwt_required()
     def delete(self, note_id):
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         result = NoteModel.query.filter_by(id=note_id, user_id=user_id).first()
         if not result:
             abort(404, message="Note not found")
